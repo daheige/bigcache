@@ -71,6 +71,32 @@ func TestPeek(t *testing.T) {
 	assertEqual(t, entry, read)
 }
 
+func TestResetFullQueue(t *testing.T) {
+	t.Parallel()
+
+	// given
+	queue := NewBytesQueue(10, 20, false)
+
+	// when
+	queue.Push(blob('a', 3))
+	queue.Push(blob('b', 4))
+
+	// when
+	assertEqual(t, blob('a', 3), pop(queue)) // space freed at the beginning
+	_, err := queue.Push(blob('a', 3))       // will set q.full to true
+
+	// then
+	assertEqual(t, err, nil)
+
+	// when
+	queue.Reset()
+	queue.Push(blob('c', 8)) // should not trigger a re-allocation
+
+	// then
+	assertEqual(t, blob('c', 8), pop(queue))
+	assertEqual(t, queue.Capacity(), 10)
+}
+
 func TestReset(t *testing.T) {
 	t.Parallel()
 
@@ -145,13 +171,13 @@ func TestAllocateAdditionalSpaceForInsufficientFreeFragmentedSpaceWhereHeadIsBef
 	queue := NewBytesQueue(25, 0, false)
 
 	// when
-	queue.Push(blob('a', 3)) // header + entry + left margin = 8 bytes
-	queue.Push(blob('b', 6)) // additional 10 bytes
-	queue.Pop()              // space freed, 7 bytes available at the beginning
-	queue.Push(blob('c', 6)) // 10 bytes needed, 14 available but not in one segment, allocate additional memory
+	queue.Push(blob('a', 3)) // header + entry + left margin = 5 bytes
+	queue.Push(blob('b', 6)) // additional 7 bytes
+	queue.Pop()              // space freed, 4 bytes available at the beginning
+	queue.Push(blob('c', 6)) // 7 bytes needed, 13 bytes available at the tail
 
 	// then
-	assertEqual(t, 50, queue.Capacity())
+	assertEqual(t, 25, queue.Capacity())
 	assertEqual(t, blob('b', 6), pop(queue))
 	assertEqual(t, blob('c', 6), pop(queue))
 }
@@ -163,13 +189,13 @@ func TestUnchangedEntriesIndexesAfterAdditionalMemoryAllocationWhereHeadIsBefore
 	queue := NewBytesQueue(25, 0, false)
 
 	// when
-	queue.Push(blob('a', 3))                   // header + entry + left margin = 8 bytes
-	index, _ := queue.Push(blob('b', 6))       // additional 10 bytes
-	queue.Pop()                                // space freed, 7 bytes available at the beginning
-	newestIndex, _ := queue.Push(blob('c', 6)) // 10 bytes needed, 14 available but not in one segment, allocate additional memory
+	queue.Push(blob('a', 3))                   // header + entry + left margin = 5 bytes
+	index, _ := queue.Push(blob('b', 6))       // additional 7 bytes
+	queue.Pop()                                // space freed, 4 bytes available at the beginning
+	newestIndex, _ := queue.Push(blob('c', 6)) // 7 bytes needed, 13 available at the tail
 
 	// then
-	assertEqual(t, 50, queue.Capacity())
+	assertEqual(t, 25, queue.Capacity())
 	assertEqual(t, blob('b', 6), get(queue, index))
 	assertEqual(t, blob('c', 6), get(queue, newestIndex))
 }
@@ -181,11 +207,11 @@ func TestAllocateAdditionalSpaceForInsufficientFreeFragmentedSpaceWhereTailIsBef
 	queue := NewBytesQueue(100, 0, false)
 
 	// when
-	queue.Push(blob('a', 70)) // header + entry + left margin = 75 bytes
-	queue.Push(blob('b', 10)) // 75 + 10 + 4 = 89 bytes
+	queue.Push(blob('a', 70)) // header + entry + left margin = 72 bytes
+	queue.Push(blob('b', 10)) // 72 + 10 + 1 = 83 bytes
 	queue.Pop()               // space freed at the beginning
-	queue.Push(blob('c', 30)) // 34 bytes used at the beginning, tail pointer is before head pointer
-	queue.Push(blob('d', 40)) // 44 bytes needed but no available in one segment, allocate new memory
+	queue.Push(blob('c', 30)) // 31 bytes used at the beginning, tail pointer is before head pointer
+	queue.Push(blob('d', 40)) // 41 bytes needed but no available in one segment, allocate new memory
 
 	// then
 	assertEqual(t, 200, queue.Capacity())
@@ -193,7 +219,7 @@ func TestAllocateAdditionalSpaceForInsufficientFreeFragmentedSpaceWhereTailIsBef
 	// empty blob fills space between tail and head,
 	// created when additional memory was allocated,
 	// it keeps current entries indexes unchanged
-	assertEqual(t, blob(0, 36), pop(queue))
+	assertEqual(t, blob(0, 39), pop(queue))
 	assertEqual(t, blob('b', 10), pop(queue))
 	assertEqual(t, blob('d', 40), pop(queue))
 }
@@ -205,11 +231,11 @@ func TestUnchangedEntriesIndexesAfterAdditionalMemoryAllocationWhereTailIsBefore
 	queue := NewBytesQueue(100, 0, false)
 
 	// when
-	queue.Push(blob('a', 70))                   // header + entry + left margin = 75 bytes
-	index, _ := queue.Push(blob('b', 10))       // 75 + 10 + 4 = 89 bytes
+	queue.Push(blob('a', 70))                   // header + entry + left margin = 72 bytes
+	index, _ := queue.Push(blob('b', 10))       // 72 + 10 + 1 = 83 bytes
 	queue.Pop()                                 // space freed at the beginning
-	queue.Push(blob('c', 30))                   // 34 bytes used at the beginning, tail pointer is before head pointer
-	newestIndex, _ := queue.Push(blob('d', 40)) // 44 bytes needed but no available in one segment, allocate new memory
+	queue.Push(blob('c', 30))                   // 31 bytes used at the beginning, tail pointer is before head pointer
+	newestIndex, _ := queue.Push(blob('d', 40)) // 41 bytes needed but no available in one segment, allocate new memory
 
 	// then
 	assertEqual(t, 200, queue.Capacity())
@@ -225,10 +251,10 @@ func TestAllocateAdditionalSpaceForValueBiggerThanInitQueue(t *testing.T) {
 
 	// when
 	queue.Push(blob('a', 100))
-
 	// then
 	assertEqual(t, blob('a', 100), pop(queue))
-	assertEqual(t, 230, queue.Capacity())
+	// 224 = (101 + 11) * 2
+	assertEqual(t, 224, queue.Capacity())
 }
 
 func TestAllocateAdditionalSpaceForValueBiggerThanQueue(t *testing.T) {
@@ -246,7 +272,8 @@ func TestAllocateAdditionalSpaceForValueBiggerThanQueue(t *testing.T) {
 	queue.Pop()
 	queue.Pop()
 	assertEqual(t, make([]byte, 100), pop(queue))
-	assertEqual(t, 250, queue.Capacity())
+	// 244 = (101 + 21) * 2
+	assertEqual(t, 244, queue.Capacity())
 }
 
 func TestPopWholeQueue(t *testing.T) {
@@ -343,13 +370,58 @@ func TestMaxSizeLimit(t *testing.T) {
 	queue.Push(blob('a', 25))
 	queue.Push(blob('b', 5))
 	capacity := queue.Capacity()
-	_, err := queue.Push(blob('c', 15))
+	_, err := queue.Push(blob('c', 20))
 
 	// then
 	assertEqual(t, 50, capacity)
 	assertEqual(t, "Full queue. Maximum size limit reached.", err.Error())
 	assertEqual(t, blob('a', 25), pop(queue))
 	assertEqual(t, blob('b', 5), pop(queue))
+}
+
+func TestPushEntryAfterAllocateAdditionMemory(t *testing.T) {
+	t.Parallel()
+
+	// given
+	queue := NewBytesQueue(9, 20, true)
+
+	// when
+	queue.Push([]byte("aaa"))
+	queue.Push([]byte("bb"))
+	queue.Pop()
+
+	// allocate more memory
+	assertEqual(t, 9, queue.Capacity())
+	queue.Push([]byte("c"))
+	assertEqual(t, 18, queue.Capacity())
+
+	// push after allocate
+	_, err := queue.Push([]byte("d"))
+	noError(t, err)
+}
+
+func TestPushEntryAfterAllocateAdditionMemoryInFull(t *testing.T) {
+	t.Parallel()
+
+	// given
+	queue := NewBytesQueue(9, 40, true)
+
+	// when
+	queue.Push([]byte("aaa"))
+	queue.Push([]byte("bb"))
+	_, err := queue.Pop()
+	noError(t, err)
+
+	queue.Push([]byte("c"))
+	queue.Push([]byte("d"))
+	queue.Push([]byte("e"))
+	_, err = queue.Pop()
+	noError(t, err)
+	_, err = queue.Pop()
+	noError(t, err)
+	queue.Push([]byte("fff"))
+	_, err = queue.Pop()
+	noError(t, err)
 }
 
 func pop(queue *BytesQueue) []byte {
@@ -369,11 +441,7 @@ func get(queue *BytesQueue, index int) []byte {
 }
 
 func blob(char byte, len int) []byte {
-	b := make([]byte, len)
-	for index := range b {
-		b[index] = char
-	}
-	return b
+	return bytes.Repeat([]byte{char}, len)
 }
 
 func assertEqual(t *testing.T, expected, actual interface{}, msgAndArgs ...interface{}) {
